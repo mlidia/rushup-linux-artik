@@ -34,9 +34,9 @@
 			uart3:uart@c00ab000 { clock-frequency = <147500000>; };
 			uart4:uart@c006e000 { clock-frequency = <147500000>; };
 			uart5:uart@c0084000 { clock-frequency = <147500000>; };
-			spi0:spi@c00ac000  { clock-frequency = <100000000>; };
-			spi1:spi@c00ad000  { clock-frequency = <100000000>; };
-			spi2:spi@c00a7000  { clock-frequency = <100000000>; };
+			spi0:spi@c00ac000  { clock-frequency = <80000000>; };
+			spi1:spi@c00ad000  { clock-frequency = <80000000>; };
+			spi2:spi@c00a7000  { clock-frequency = <80000000>; };
 		};
 
 		dw_mmc_2:dw_mmc@c0069000 {
@@ -59,9 +59,9 @@
 		pinctrl@C0010000 {
 			cfg_wlanhostwake: cfg-wlanhostwake {
 				nexell,pins = "alive-3";
-				nexell,pin-function = <0>;
-				nexell,pin-pull = <1>;
-				nexell,pin-strength = <0>;
+				nexell,pin-function = <NX_PIN_FUNC0>;
+				nexell,pin-pull = <NX_PIN_PULL_UP>;
+				nexell,pin-strength = <NX_PIN_STR0>;
 			};
 		};
 	};	/*** soc ***/
@@ -183,4 +183,8 @@
 
 	pinctrl-names = "default";
 	pinctrl-0 = <&sdmmc1_cclk &sdmmc1_cmd &sdmmc1_bus4 &cfg_wlanhostwake>;
+};
+
+&spi2_bus {
+	nexell,pin-strength = <NX_PIN_STR1>;
 };

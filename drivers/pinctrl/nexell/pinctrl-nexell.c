@@ -38,6 +38,8 @@ static struct pin_config {
 } cfg_params[] = {
 	{"nexell,pin-pull", PINCFG_TYPE_PULL},
 	{"nexell,pin-strength", PINCFG_TYPE_DRV},
+	{"nexell,pin-dir", PINCFG_TYPE_DIR},
+	{"nexell,pin-val", PINCFG_TYPE_DAT},
 };
 
 /* Global list of devices (struct nexell_pinctrl_drv_data) */
@@ -280,11 +282,30 @@ static int nexell_dt_node_to_map(struct pinctrl_dev *pctldev,
 	return 0;
 }
 
+static void nexell_get_group_status(struct pinctrl_dev *pctldev,
+		struct seq_file *s, unsigned offset)
+{
+	if ((offset & ~(32 - 1)) != PAD_GPIO_ALV) {
+		seq_printf(s, "\t: Func(%d), Dir(%d), Val(%d), Pull(%d), Drv(%d)",
+			nx_soc_gpio_get_io_func(offset),
+			nx_soc_gpio_get_io_dir(offset),
+			nx_soc_gpio_get_in_value(offset),
+			nx_soc_gpio_get_io_pull(offset),
+			nx_soc_gpio_get_io_drv(offset));
+	} else {
+		seq_printf(s, "\t: Func(N), Dir(%d), Val(%d), Pull(%d), Drv(N)",
+			nx_soc_gpio_get_io_dir(offset),
+			nx_soc_gpio_get_in_value(offset),
+			nx_soc_gpio_get_io_pull(offset));
+	}
+}
+
 /* list of pinctrl callbacks for the pinctrl core */
 static const struct pinctrl_ops nexell_pctrl_ops = {
 	.get_groups_count = nexell_get_group_count,
 	.get_group_name = nexell_get_group_name,
 	.get_group_pins = nexell_get_group_pins,
+	.pin_dbg_show = nexell_get_group_status,
 	.dt_node_to_map = nexell_dt_node_to_map,
 	.dt_free_map = nexell_dt_free_map,
 };
@@ -401,7 +422,8 @@ static int nexell_soc_write_pin(unsigned int io,
 		nx_soc_gpio_set_io_dir(io, data);
 		break;
 	default:
-		break;
+		pr_err("unsupported pincfg_type : %s\n", __func__);
+		return -EINVAL;
 	}
 
 	return 0;
@@ -431,7 +453,8 @@ static int nexell_soc_read_pin(unsigned int io,
 		*data = nx_soc_gpio_get_io_func(io);
 		break;
 	default:
-		break;
+		pr_err("unsupported pincfg_type : %s\n", __func__);
+		return -EINVAL;
 	}
 
 	return 0;
@@ -831,11 +854,19 @@ static int nexell_pinctrl_register(struct platform_device *pdev,
 	for (bank = 0; bank < drvdata->ctrl->nr_banks; bank++) {
 		pin_bank = &drvdata->ctrl->pin_banks[bank];
 		for (pin = 0; pin < pin_bank->nr_pins; pin++) {
-			sprintf(pin_names, "%s-%d", pin_bank->name, pin);
+			snprintf(pin_names, PIN_NAME_LENGTH, "%s-%d",
+				 pin_bank->name, pin);
 			pdesc = pindesc + pin_bank->pin_base + pin;
 			pdesc->name = pin_names;
 			pin_names += PIN_NAME_LENGTH;
 		}
+		pin_bank->grange.name = pin_bank->name;
+		pin_bank->grange.id = bank;
+		pin_bank->grange.pin_base =
+		    drvdata->ctrl->base + pin_bank->pin_base;
+		pin_bank->grange.base = pin_bank->gpio_chip.base;
+		pin_bank->grange.npins = pin_bank->gpio_chip.ngpio;
+		pin_bank->grange.gc = &pin_bank->gpio_chip;
 	}
 
 	ret = nexell_pinctrl_parse_dt(pdev, drvdata);
@@ -850,13 +881,6 @@ static int nexell_pinctrl_register(struct platform_device *pdev,
 
 	for (bank = 0; bank < drvdata->ctrl->nr_banks; ++bank) {
 		pin_bank = &drvdata->ctrl->pin_banks[bank];
-		pin_bank->grange.name = pin_bank->name;
-		pin_bank->grange.id = bank;
-		pin_bank->grange.pin_base =
-		    drvdata->ctrl->base + pin_bank->pin_base;
-		pin_bank->grange.base = pin_bank->gpio_chip.base;
-		pin_bank->grange.npins = pin_bank->gpio_chip.ngpio;
-		pin_bank->grange.gc = &pin_bank->gpio_chip;
 		pinctrl_add_gpio_range(drvdata->pctl_dev, &pin_bank->grange);
 	}
 
@@ -1062,6 +1086,9 @@ static int nexell_pinctrl_probe(struct platform_device *pdev)
 		bank->irq = irq;
 	}
 
+	if (ctrl->base_init)
+		ctrl->base_init(drvdata);
+
 	ret = nexell_gpiolib_register(pdev, drvdata);
 	if (ret)
 		return ret;
@@ -1072,8 +1099,6 @@ static int nexell_pinctrl_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	if (ctrl->base_init)
-		ctrl->base_init(drvdata);
 	if (ctrl->gpio_irq_init)
 		ctrl->gpio_irq_init(drvdata);
 	if (ctrl->alive_irq_init)

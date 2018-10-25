@@ -1725,6 +1725,21 @@
 #define RT5659_AD2DA_LB_MASK			(0x1 << 9)
 #define RT5659_AD2DA_LB_SFT			9
 
+/* DAC Mixer multiple flag */
+#define DAC_L1_STO_MIXER_FLAG \
+		(RT5659_M_DAC_L1_STO_L | RT5659_M_DAC_R1_STO_L | \
+		RT5659_M_DAC_L1_STO_R | RT5659_M_DAC_R1_STO_R)
+#define DAC_L1_MONO_MIXER_FLAG \
+		(RT5659_M_DAC_L1_MONO_L | RT5659_M_DAC_R1_MONO_L | \
+		RT5659_M_DAC_L1_MONO_R | RT5659_M_DAC_R1_MONO_R)
+#define DAC_L2_STO_MIXER_FLAG \
+		(RT5659_M_DAC_L2_STO_L | RT5659_M_DAC_L2_STO_R)
+#define DAC_L2_MONO_MIXER_FLAG \
+		(RT5659_M_DAC_L2_MONO_L | RT5659_M_DAC_L2_MONO_R)
+#define DAC_R2_STO_MIXER_FLAG \
+		(RT5659_M_DAC_R2_STO_L | RT5659_M_DAC_R2_STO_R)
+#define DAC_R2_MONO_MIXER_FLAG \
+		(RT5659_M_DAC_R2_MONO_L | RT5659_M_DAC_R2_MONO_R)
 
 /* System Clock Source */
 enum {
@@ -1805,7 +1820,8 @@ int rt5659_headset_detect(struct snd_soc_codec *codec, int jack_insert);
 int rt5659_button_detect(struct snd_soc_codec *codec);
 int rt5659_check_jd_status(struct snd_soc_codec *codec);
 
-void rt5659_micbias_output(int micbias, int enable_lod2, int on);
+void rt5659_micbias_output(int micbias, int enable_lod2, int on,
+		struct snd_soc_codec *codec);
 void rt5659_stereo1_adc_mute(bool mute);
 
 #endif /* __RT5659_H__ */

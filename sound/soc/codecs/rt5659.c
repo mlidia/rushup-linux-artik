@@ -2888,7 +2888,7 @@ static int set_bst1_power(struct snd_soc_dapm_widget *w,
 
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
-		rt5659_micbias_output(RT5659_MICBIAS1, 1, 1);
+		rt5659_micbias_output(RT5659_MICBIAS1, 1, 1, codec);
 		snd_soc_update_bits(codec, RT5659_PWR_ANLG_2,
 			RT5659_PWR_BST1_P | RT5659_PWR_BST1,
 			RT5659_PWR_BST1_P | RT5659_PWR_BST1);
@@ -2913,7 +2913,7 @@ static int set_bst2_power(struct snd_soc_dapm_widget *w,
 
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
-		rt5659_micbias_output(RT5659_MICBIAS1, 1, 1);
+		rt5659_micbias_output(RT5659_MICBIAS1, 1, 1, codec);
 		snd_soc_update_bits(codec, RT5659_PWR_ANLG_2,
 			RT5659_PWR_BST2_P | RT5659_PWR_BST2,
 			RT5659_PWR_BST2_P | RT5659_PWR_BST2);
@@ -3095,8 +3095,12 @@ static int rt5659_sto1_filter_event(struct snd_soc_dapm_widget *w,
 		break;
 
 	case SND_SOC_DAPM_POST_PMU:
-		schedule_delayed_work(&rt5659->dac1_depop_work,
-			msecs_to_jiffies(10));
+		if ((rt5659->dac1_sto_dac_mixer & DAC_L1_STO_MIXER_FLAG)
+				!= DAC_L1_STO_MIXER_FLAG ||
+			(rt5659->dac1_mono_dac_mixer & DAC_L1_MONO_MIXER_FLAG)
+				!= DAC_L1_MONO_MIXER_FLAG)
+			schedule_delayed_work(&rt5659->dac1_depop_work,
+				msecs_to_jiffies(0));
 		break;
 
 	default:
@@ -3130,8 +3134,12 @@ static int rt5659_monol_filter_event(struct snd_soc_dapm_widget *w,
 		break;
 
 	case SND_SOC_DAPM_POST_PMU:
-		schedule_delayed_work(&rt5659->dac2l_depop_work,
-			msecs_to_jiffies(10));
+		if ((rt5659->dac2l_sto_dac_mixer & DAC_L2_STO_MIXER_FLAG)
+				!= DAC_L2_STO_MIXER_FLAG ||
+			(rt5659->dac2l_mono_dac_mixer & DAC_L2_MONO_MIXER_FLAG)
+				!= DAC_L2_MONO_MIXER_FLAG)
+			schedule_delayed_work(&rt5659->dac2l_depop_work,
+				msecs_to_jiffies(0));
 		break;
 
 	default:
@@ -3165,8 +3173,12 @@ static int rt5659_monor_filter_event(struct snd_soc_dapm_widget *w,
 		break;
 
 	case SND_SOC_DAPM_POST_PMU:
-		schedule_delayed_work(&rt5659->dac2r_depop_work,
-			msecs_to_jiffies(10));
+		if ((rt5659->dac2r_sto_dac_mixer & DAC_R2_STO_MIXER_FLAG)
+				!= DAC_R2_STO_MIXER_FLAG ||
+			(rt5659->dac2r_mono_dac_mixer & DAC_R2_MONO_MIXER_FLAG)
+				!= DAC_R2_MONO_MIXER_FLAG)
+			schedule_delayed_work(&rt5659->dac2r_depop_work,
+				msecs_to_jiffies(0));
 		break;
 
 	default:
@@ -4751,11 +4763,13 @@ static int rt5659_set_bias_level(struct snd_soc_codec *codec,
 	return 0;
 }
 
-void rt5659_micbias_output(int micbias, int enable_ldo2, int on)
+void rt5659_micbias_output(int micbias, int enable_ldo2, int on,
+		struct snd_soc_codec *codec)
 {
 	unsigned int value;
+	struct rt5659_priv *rt5659 = snd_soc_codec_get_drvdata(codec);
 
-	mutex_lock(&global_rt5659->calibrate_mutex);
+	mutex_lock(&rt5659->calibrate_mutex);
 
 	if (on) {
 		regmap_update_bits(global_regmap, RT5659_PWR_ANLG_1,
@@ -4805,7 +4819,7 @@ void rt5659_micbias_output(int micbias, int enable_ldo2, int on)
 				RT5659_PWR_FV2, 0);
 		}
 	}
-	mutex_unlock(&global_rt5659->calibrate_mutex);
+	mutex_unlock(&rt5659->calibrate_mutex);
 }
 EXPORT_SYMBOL(rt5659_micbias_output);
 
@@ -5297,7 +5311,8 @@ static void rt5659_dac1_depop_work(struct work_struct *work)
 		container_of(work, struct rt5659_priv, dac1_depop_work.work);
 	struct snd_soc_codec *codec = rt5659->codec;
 
-	mutex_lock(&rt5659->calibrate_mutex);
+	mutex_lock(&rt5659->codec->component.card->dapm_mutex);
+	usleep_range(10000, 10010);
 	snd_soc_update_bits(codec, RT5659_STO_DAC_MIXER,
 		RT5659_M_DAC_L1_STO_L | RT5659_M_DAC_R1_STO_L |
 		RT5659_M_DAC_L1_STO_R | RT5659_M_DAC_R1_STO_R,
@@ -5306,7 +5321,7 @@ static void rt5659_dac1_depop_work(struct work_struct *work)
 		RT5659_M_DAC_L1_MONO_L | RT5659_M_DAC_R1_MONO_L |
 		RT5659_M_DAC_L1_MONO_R | RT5659_M_DAC_R1_MONO_R,
 		rt5659->dac1_mono_dac_mixer);
-	mutex_unlock(&rt5659->calibrate_mutex);
+	mutex_unlock(&rt5659->codec->component.card->dapm_mutex);
 }
 
 static void rt5659_dac2l_depop_work(struct work_struct *work)
@@ -5315,14 +5330,15 @@ static void rt5659_dac2l_depop_work(struct work_struct *work)
 		container_of(work, struct rt5659_priv, dac2l_depop_work.work);
 	struct snd_soc_codec *codec = rt5659->codec;
 
-	mutex_lock(&rt5659->calibrate_mutex);
+	mutex_lock(&rt5659->codec->component.card->dapm_mutex);
+	usleep_range(10000, 10010);
 	snd_soc_update_bits(codec, RT5659_STO_DAC_MIXER,
 		RT5659_M_DAC_L2_STO_L | RT5659_M_DAC_L2_STO_R,
 		rt5659->dac2l_sto_dac_mixer);
 	snd_soc_update_bits(codec, RT5659_MONO_DAC_MIXER,
 		RT5659_M_DAC_L2_MONO_L | RT5659_M_DAC_L2_MONO_R,
 		rt5659->dac2l_mono_dac_mixer);
-	mutex_unlock(&rt5659->calibrate_mutex);
+	mutex_unlock(&rt5659->codec->component.card->dapm_mutex);
 }
 
 static void rt5659_dac2r_depop_work(struct work_struct *work)
@@ -5331,14 +5347,15 @@ static void rt5659_dac2r_depop_work(struct work_struct *work)
 		container_of(work, struct rt5659_priv, dac2r_depop_work.work);
 	struct snd_soc_codec *codec = rt5659->codec;
 
-	mutex_lock(&rt5659->calibrate_mutex);
+	mutex_lock(&rt5659->codec->component.card->dapm_mutex);
+	usleep_range(10000, 10010);
 	snd_soc_update_bits(codec, RT5659_STO_DAC_MIXER,
 		RT5659_M_DAC_R2_STO_L | RT5659_M_DAC_R2_STO_R,
 		rt5659->dac2r_sto_dac_mixer);
 	snd_soc_update_bits(codec, RT5659_MONO_DAC_MIXER,
 		RT5659_M_DAC_R2_MONO_L | RT5659_M_DAC_R2_MONO_R,
 		rt5659->dac2r_mono_dac_mixer);
-	mutex_unlock(&rt5659->calibrate_mutex);
+	mutex_unlock(&rt5659->codec->component.card->dapm_mutex);
 }
 
 static void rt5659_calibrate_handler(struct work_struct *work)
@@ -5367,7 +5384,7 @@ static int rt5659_i2c_probe(struct i2c_client *i2c,
 	rt5659 = devm_kzalloc(&i2c->dev, sizeof(struct rt5659_priv),
 		GFP_KERNEL);
 
-	if (NULL == rt5659)
+	if (rt5659 == NULL)
 		return -ENOMEM;
 
 	rt5659->i2c = i2c;

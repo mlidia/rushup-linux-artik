@@ -143,6 +143,14 @@ void nx_bus_qos_unlock(void)
 }
 EXPORT_SYMBOL(nx_bus_qos_unlock);
 
+int nx_devfreq_read_cur_freq(void)
+{
+	if (_nx_devfreq == NULL)
+		return -ENODEV;
+	return atomic_read(&_nx_devfreq->cur_freq);
+}
+EXPORT_SYMBOL(nx_devfreq_read_cur_freq);
+
 /* soc specific */
 struct pll_pms {
 	unsigned long rate;
@@ -182,8 +190,8 @@ static int get_pll_data(u32 pll, unsigned long rate, u32 *pll_data,
 			unsigned long *voltage)
 {
 	struct pll_pms *p = NULL;
-	int len;
-	int i;
+	int len = 0;
+	int i = 0;
 	unsigned long freq = 0;
 
 	switch (pll) {
@@ -197,6 +205,8 @@ static int get_pll_data(u32 pll, unsigned long rate, u32 *pll_data,
 		p = &pll2_3_pms[0];
 		len = ARRAY_SIZE(pll2_3_pms);
 		break;
+	default:
+		return -EINVAL;
 	}
 
 	for (i = 0; i < len; i++) {
@@ -312,6 +322,7 @@ static int nx_devfreq_pm_qos_notifier(struct notifier_block *nb,
 	devfreq_nb = container_of(nb, struct devfreq_notifier_block, nb);
 	nx_devfreq = devfreq_nb->df->data;
 
+	mutex_lock(&devfreq_nb->df->lock);
 	dev_dbg(nx_devfreq->dev, "%s: val --> %ld\n", __func__, val);
 	if (val == PM_QOS_DEFAULT_VALUE)
 		val = nx_devfreq_profile.initial_freq;
@@ -327,12 +338,12 @@ static int nx_devfreq_pm_qos_notifier(struct notifier_block *nb,
 		dev_dbg(nx_devfreq->dev, "%s changed from %d to %d\n",
 			 __func__, cur_freq, new);
 		atomic_set(&nx_devfreq->req_freq, new);
-		mutex_lock(&devfreq_nb->df->lock);
 		update_devfreq(devfreq_nb->df);
 		mutex_unlock(&devfreq_nb->df->lock);
 		return NOTIFY_OK;
 	}
 
+	mutex_unlock(&devfreq_nb->df->lock);
 	return NOTIFY_STOP;
 }
 

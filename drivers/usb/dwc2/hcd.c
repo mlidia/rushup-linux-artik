@@ -2408,6 +2408,7 @@ static void _dwc2_hcd_stop(struct usb_hcd *hcd)
 
 	usleep_range(1000, 3000);
 }
+
 #if defined(CONFIG_PM) && (defined(CONFIG_ARCH_S5P4418) || \
 	defined(CONFIG_ARCH_S5P6818))
 struct dwc2_core_global_regs {
@@ -2504,8 +2505,6 @@ static int _dwc2_hcd_suspend(struct usb_hcd *hcd)
 
 	dev_dbg(hsotg->dev, "%s %d\n", __func__, __LINE__);
 
-	dwc2_driver_suspend_regs(hsotg, 1);
-
 	if (hsotg->op_state == OTG_STATE_B_PERIPHERAL) {
 		dev_warn(hsotg->dev, "%s, usb device mode\n", __func__);
 		return 0;
@@ -2533,8 +2532,6 @@ static int _dwc2_hcd_resume(struct usb_hcd *hcd)
 	u32 gotgctl;
 
 	dev_dbg(hsotg->dev, "%s %d\n", __func__, __LINE__);
-
-	dwc2_driver_suspend_regs(hsotg, 0);
 
 	if (hsotg->op_state == OTG_STATE_B_PERIPHERAL) {
 		dev_warn(hsotg->dev, "%s, usb device mode\n", __func__);

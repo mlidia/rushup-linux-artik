@@ -605,6 +605,24 @@ struct spi_device *spi_new_device(struct spi_master *master,
 }
 EXPORT_SYMBOL_GPL(spi_new_device);
 
+/**
+ * spi_unregister_device - unregister a single SPI device
+ * @spi: spi_device to unregister
+ *
+ * Start making the passed SPI device vanish. Normally this would be handled
+ * by spi_unregister_master().
+ */
+void spi_unregister_device(struct spi_device *spi)
+{
+	if (!spi)
+		return;
+
+	if (spi->dev.of_node)
+		of_node_clear_flag(spi->dev.of_node, OF_POPULATED);
+	device_unregister(&spi->dev);
+}
+EXPORT_SYMBOL_GPL(spi_unregister_device);
+
 static void spi_match_master_to_boardinfo(struct spi_master *master,
 				struct spi_board_info *bi)
 {
@@ -1111,12 +1129,14 @@ static void __spi_pump_messages(struct spi_master *master, bool in_kthread)
 		master->busy = true;
 	spin_unlock_irqrestore(&master->queue_lock, flags);
 
+	mutex_lock(&master->io_mutex);
+
 	if (!was_busy && master->auto_runtime_pm) {
 		ret = pm_runtime_get_sync(master->dev.parent);
 		if (ret < 0) {
 			dev_err(&master->dev, "Failed to power device: %d\n",
 				ret);
-			return;
+			goto out;
 		}
 	}
 
@@ -1131,7 +1151,7 @@ static void __spi_pump_messages(struct spi_master *master, bool in_kthread)
 
 			if (master->auto_runtime_pm)
 				pm_runtime_put(master->dev.parent);
-			return;
+			goto out;
 		}
 	}
 
@@ -1144,7 +1164,7 @@ static void __spi_pump_messages(struct spi_master *master, bool in_kthread)
 				"failed to prepare message: %d\n", ret);
 			master->cur_msg->status = ret;
 			spi_finalize_current_message(master);
-			return;
+			goto out;
 		}
 		master->cur_msg_prepared = true;
 	}
@@ -1153,15 +1173,16 @@ static void __spi_pump_messages(struct spi_master *master, bool in_kthread)
 	if (ret) {
 		master->cur_msg->status = ret;
 		spi_finalize_current_message(master);
-		return;
+		goto out;
 	}
 
 	ret = master->transfer_one_message(master, master->cur_msg);
 	if (ret) {
 		dev_err(&master->dev,
 			"failed to transfer one message from queue\n");
-		return;
 	}
+out:
+	mutex_unlock(&master->io_mutex);
 }
 
 /**
@@ -1446,6 +1467,16 @@ of_register_spi_device(struct spi_master *master, struct device_node *nc)
 		goto err_out;
 	}
 
+	if (spi_controller_is_slave(master)) {
+		if (strcmp(nc->name, "slave")) {
+			dev_err(&master->dev, "%s is not called 'slave'\n",
+					nc->full_name);
+			rc = -EINVAL;
+			goto err_out;
+		}
+		return spi;
+	}
+
 	/* Device address */
 	rc = of_property_read_u32(nc, "reg", &value);
 	if (rc) {
@@ -1536,8 +1567,8 @@ err_out:
  * of_register_spi_devices() - Register child devices onto the SPI bus
  * @master:	Pointer to spi_master device
  *
- * Registers an spi_device for each child node of master node which has a 'reg'
- * property.
+ * Registers an spi_device for each child node of controller node which
+ * represents a valid SPI slave.
  */
 static void of_register_spi_devices(struct spi_master *master)
 {
@@ -1548,6 +1579,8 @@ static void of_register_spi_devices(struct spi_master *master)
 		return;
 
 	for_each_available_child_of_node(master->dev.of_node, nc) {
+		if (of_node_test_and_set_flag(nc, OF_POPULATED))
+			continue;
 		spi = of_register_spi_device(master, nc);
 		if (IS_ERR(spi))
 			dev_warn(&master->dev, "Failed to create SPI device for %s\n",
@@ -1669,28 +1702,128 @@ static struct class spi_master_class = {
 	.dev_groups	= spi_master_groups,
 };
 
+#ifdef CONFIG_SPI_SLAVE
+/**
+ * spi_slave_abort - abort the ongoing transfer request on an SPI slave
+ * 		controller
+ * @spi: device used for the current transfer
+ */
+int spi_slave_abort(struct spi_device *spi)
+{
+	struct spi_master *master = spi->master;
+
+	if (spi_controller_is_slave(master) && master->slave_abort)
+		return master->slave_abort(master);
+
+	return -ENOTSUPP;
+}
+EXPORT_SYMBOL_GPL(spi_slave_abort);
+
+static int match_true(struct device *dev, void *data)
+{
+	return 1;
+}
+
+static ssize_t spi_slave_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct spi_master *ctlr = container_of(dev, struct spi_master, dev);
+	struct device *child;
+
+	child = device_find_child(&ctlr->dev, NULL, match_true);
+	return sprintf(buf, "%s\n",
+			child ? to_spi_device(child)->modalias : NULL);
+}
+
+static ssize_t spi_slave_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct spi_master *ctlr = container_of(dev, struct spi_master, dev);
+	struct spi_device *spi;
+	struct device *child;
+	char name[32];
+	int rc;
+
+	rc = sscanf(buf, "%31s", name);
+	if (rc != 1 || !name[0])
+		return -EINVAL;
+
+	child = device_find_child(&ctlr->dev, NULL, match_true);
+	if (child) {
+		/* Remove registered slave */
+		device_unregister(child);
+		put_device(child);
+	}
+
+	if (strcmp(name, "(null)")) {
+		/* Register new slave */
+		spi = spi_alloc_device(ctlr);
+		if (!spi)
+			return -ENOMEM;
+
+		strlcpy(spi->modalias, name, sizeof(spi->modalias));
+
+		rc = spi_add_device(spi);
+		if (rc) {
+			spi_dev_put(spi);
+			return rc;
+		}
+	}
+
+	return count;
+}
+
+static DEVICE_ATTR(slave, 0644, spi_slave_show, spi_slave_store);
+
+static struct attribute *spi_slave_attrs[] = {
+	&dev_attr_slave.attr,
+	NULL,
+};
+
+static const struct attribute_group spi_slave_group = {
+	.attrs = spi_slave_attrs,
+};
+
+static const struct attribute_group *spi_slave_groups[] = {
+	&spi_master_statistics_group,
+	&spi_slave_group,
+	NULL,
+};
+
+static struct class spi_slave_class = {
+	.name		= "spi_slave",
+	.owner		= THIS_MODULE,
+	.dev_release	= spi_master_release,
+	.dev_groups	= spi_slave_groups,
+};
+#else
+extern struct class spi_slave_class;	/* dummy */
+#endif
 
 /**
- * spi_alloc_master - allocate SPI master controller
+ * __spi_alloc_master - allocate an SPI master or slave controller
  * @dev: the controller, possibly using the platform_bus
  * @size: how much zeroed driver-private data to allocate; the pointer to this
  *	memory is in the driver_data field of the returned device,
  *	accessible with spi_master_get_devdata().
+ * @slave: flag indicating whether to allocate an SPI master (false) or SPI
+ * 	slave (true) controller
  * Context: can sleep
  *
- * This call is used only by SPI master controller drivers, which are the
+ * This call is used only by SPI controller drivers, which are the
  * only ones directly touching chip registers.  It's how they allocate
  * an spi_master structure, prior to calling spi_register_master().
  *
  * This must be called from context that can sleep.
  *
- * The caller is responsible for assigning the bus number and initializing
- * the master's methods before calling spi_register_master(); and (after errors
+ * The caller is responsible for assigning the bus number and initializing the
+ * controller's methods before calling spi_register_master(); and (after errors
  * adding the device) calling spi_master_put() to prevent a memory leak.
  *
- * Return: the SPI master structure on success, else NULL.
+ * Return: the SPI controller structure on success, else NULL.
  */
-struct spi_master *spi_alloc_master(struct device *dev, unsigned size)
+struct spi_master *__spi_alloc_controller(struct device *dev,
+					unsigned size, bool slave)
 {
 	struct spi_master	*master;
 
@@ -1704,13 +1837,17 @@ struct spi_master *spi_alloc_master(struct device *dev, unsigned size)
 	device_initialize(&master->dev);
 	master->bus_num = -1;
 	master->num_chipselect = 1;
-	master->dev.class = &spi_master_class;
+	master->slave = slave;
+	if (IS_ENABLED(CONFIG_SPI_SLAVE) && slave)
+		master->dev.class = &spi_slave_class;
+	else
+		master->dev.class = &spi_master_class;
 	master->dev.parent = dev;
 	spi_master_set_devdata(master, &master[1]);
 
 	return master;
 }
-EXPORT_SYMBOL_GPL(spi_alloc_master);
+EXPORT_SYMBOL_GPL(__spi_alloc_controller);
 
 #ifdef CONFIG_OF
 static int of_spi_register_master(struct spi_master *master)
@@ -1786,9 +1923,11 @@ int spi_register_master(struct spi_master *master)
 	if (!dev)
 		return -ENODEV;
 
-	status = of_spi_register_master(master);
-	if (status)
-		return status;
+	if (!spi_controller_is_slave(master)) {
+		status = of_spi_register_master(master);
+		if (status)
+			return status;
+	}
 
 	/* even if it's just one always-selected device, there must
 	 * be at least one chipselect
@@ -1812,6 +1951,7 @@ int spi_register_master(struct spi_master *master)
 	spin_lock_init(&master->queue_lock);
 	spin_lock_init(&master->bus_lock_spinlock);
 	mutex_init(&master->bus_lock_mutex);
+	mutex_init(&master->io_mutex);
 	master->bus_lock_flag = 0;
 	init_completion(&master->xfer_completion);
 	if (!master->max_dma_len)
@@ -1824,8 +1964,9 @@ int spi_register_master(struct spi_master *master)
 	status = device_add(&master->dev);
 	if (status < 0)
 		goto done;
-	dev_dbg(dev, "registered master %s%s\n", dev_name(&master->dev),
-			dynamic ? " (dynamic)" : "");
+	dev_dbg(dev, "registered %s %s%s\n",
+			spi_controller_is_slave(master) ? "slave" : "master",
+			dev_name(&master->dev), dynamic ? " (dynamic)" : "");
 
 	/* If we're using a queued driver, start the queue */
 	if (master->transfer)
@@ -2072,13 +2213,15 @@ int spi_setup(struct spi_device *spi)
 	if (!spi->bits_per_word)
 		spi->bits_per_word = 8;
 
+	mutex_lock(&spi->master->io_mutex);
 	status = __spi_validate_bits_per_word(spi->master, spi->bits_per_word);
-	if (status)
+	if (status) {
+		mutex_unlock(&spi->master->io_mutex);
 		return status;
+	}
 
 	if (!spi->max_speed_hz)
 		spi->max_speed_hz = spi->master->max_speed_hz;
-
 	if (spi->master->setup)
 		status = spi->master->setup(spi);
 
@@ -2092,6 +2235,7 @@ int spi_setup(struct spi_device *spi)
 			(spi->mode & SPI_LOOP) ? "loopback, " : "",
 			spi->bits_per_word, spi->max_speed_hz,
 			status);
+	mutex_unlock(&spi->master->io_mutex);
 
 	return status;
 }
@@ -2613,6 +2757,9 @@ static struct spi_master *of_find_spi_master_by_node(struct device_node *node)
 
 	dev = class_find_device(&spi_master_class, NULL, node,
 				__spi_of_master_match);
+	if (!dev && IS_ENABLED(CONFIG_SPI_SLAVE))
+		dev = class_find_device(&spi_slave_class, NULL, node,
+				__spi_of_master_match);
 	if (!dev)
 		return NULL;
 
@@ -2633,6 +2780,11 @@ static int of_spi_notify(struct notifier_block *nb, unsigned long action,
 		if (master == NULL)
 			return NOTIFY_OK;	/* not for us */
 
+		if (of_node_test_and_set_flag(rd->dn, OF_POPULATED)) {
+			put_device(&master->dev);
+			return NOTIFY_OK;
+		}
+
 		spi = of_register_spi_device(master, rd->dn);
 		put_device(&master->dev);
 
@@ -2644,6 +2796,10 @@ static int of_spi_notify(struct notifier_block *nb, unsigned long action,
 		break;
 
 	case OF_RECONFIG_CHANGE_REMOVE:
+		/* already depopulated? */
+		if (!of_node_check_flag(rd->dn, OF_POPULATED))
+			return NOTIFY_OK;
+
 		/* find our device by node */
 		spi = of_find_spi_device_by_node(rd->dn);
 		if (spi == NULL)
@@ -2685,11 +2841,18 @@ static int __init spi_init(void)
 	if (status < 0)
 		goto err2;
 
+	if (IS_ENABLED(CONFIG_SPI_SLAVE)) {
+		status = class_register(&spi_slave_class);
+		if (status < 0)
+			goto err3;
+	}
+
 	if (IS_ENABLED(CONFIG_OF_DYNAMIC))
 		WARN_ON(of_reconfig_notifier_register(&spi_of_notifier));
 
 	return 0;
-
+err3:
+	class_unregister(&spi_master_class);
 err2:
 	bus_unregister(&spi_bus_type);
 err1:

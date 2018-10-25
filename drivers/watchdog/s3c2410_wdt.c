@@ -66,7 +66,12 @@
 #define S3C2410_WTCON_PRESCALE(x)	((x) << 8)
 #define S3C2410_WTCON_PRESCALE_MASK	(0xff << 8)
 
+#if defined(CONFIG_S5P6818_WATCHDOG_ATBOOT)
+#define CONFIG_S3C2410_WATCHDOG_ATBOOT		(1)
+#else
 #define CONFIG_S3C2410_WATCHDOG_ATBOOT		(0)
+#endif
+
 #if defined(CONFIG_ARCH_S5P4418) || defined(CONFIG_ARCH_S5P6818)
 #define CONFIG_S3C2410_WATCHDOG_DEFAULT_TIME	(10)
 #else
@@ -88,6 +93,9 @@ static int tmr_margin;
 static int tmr_atboot	= CONFIG_S3C2410_WATCHDOG_ATBOOT;
 static int soft_noboot;
 static int debug;
+#if defined(CONFIG_S5P6818_WATCHDOG_ATBOOT)
+static struct timer_list watchdog_timer;
+#endif
 
 module_param(tmr_margin,  int, 0);
 module_param(tmr_atboot,  int, 0);
@@ -409,6 +417,17 @@ static irqreturn_t s3c2410wdt_irq(int irqno, void *param)
 	return IRQ_HANDLED;
 }
 
+#if defined(CONFIG_S5P6818_WATCHDOG_ATBOOT)
+static void watchdog_timer_handler(unsigned long data)
+{
+	struct s3c2410_wdt *wdt = (struct s3c2410_wdt*)data;
+
+	s3c2410wdt_keepalive(&wdt->wdt_device);
+
+	mod_timer(&watchdog_timer, (jiffies + 5*HZ));
+}
+#endif
+
 #ifdef CONFIG_ARM_S3C24XX_CPUFREQ
 
 static int s3c2410wdt_cpufreq_transition(struct notifier_block *nb,
@@ -688,6 +707,13 @@ static int s3c2410wdt_probe(struct platform_device *pdev)
 		 (wtcon & S3C2410_WTCON_RSTEN) ? "en" : "dis",
 		 (wtcon & S3C2410_WTCON_INTEN) ? "en" : "dis");
 
+#if defined(CONFIG_S5P6818_WATCHDOG_ATBOOT)
+	if (tmr_atboot && started == 0) {
+		setup_timer(&watchdog_timer, watchdog_timer_handler, (unsigned long)wdt);
+		mod_timer(&watchdog_timer, (jiffies + 5*HZ));
+	}
+#endif
+
 	return 0;
 
  err_unregister:
@@ -762,15 +788,17 @@ static int s3c2410wdt_resume(struct device *dev)
 #ifdef CONFIG_RESET_CONTROLLER
 		struct reset_control *rst;
 
-		rst = devm_reset_control_get(dev, "wdt-reset");
+		rst = reset_control_get(dev, "wdt-reset");
 		if (!IS_ERR(rst)) {
 			if (reset_control_status(rst))
 				reset_control_reset(rst);
+			reset_control_put(rst);
 		}
-		rst = devm_reset_control_get(dev, "wdt-por-reset");
+		rst = reset_control_get(dev, "wdt-por-reset");
 		if (!IS_ERR(rst)) {
 			if (reset_control_status(rst))
 				reset_control_reset(rst);
+			reset_control_put(rst);
 		}
 #endif
 	}
@@ -806,7 +834,20 @@ static struct platform_driver s3c2410wdt_driver = {
 	},
 };
 
+#if defined(CONFIG_S5P6818_WATCHDOG_ATBOOT)
+static int __init s3c2410wdt_init(void)
+{
+	return platform_driver_register(&s3c2410wdt_driver);
+}
+
+static void __exit s3c2410wdt_exit(void)
+{
+	platform_driver_unregister(&s3c2410wdt_driver);
+}
+arch_initcall(s3c2410wdt_init);
+#else
 module_platform_driver(s3c2410wdt_driver);
+#endif
 
 MODULE_AUTHOR("Ben Dooks <ben@simtec.co.uk>, "
 	      "Dimitry Andric <dimitry.andric@tomtom.com>");

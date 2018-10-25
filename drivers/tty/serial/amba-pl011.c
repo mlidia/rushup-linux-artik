@@ -1950,7 +1950,7 @@ static const char *pl011_type(struct uart_port *port)
  */
 static void pl011_release_port(struct uart_port *port)
 {
-	release_mem_region(port->mapbase, SZ_4K);
+	devm_release_mem_region(port->dev, port->mapbase, SZ_4K);
 }
 
 /*
@@ -1958,8 +1958,8 @@ static void pl011_release_port(struct uart_port *port)
  */
 static int pl011_request_port(struct uart_port *port)
 {
-	return request_mem_region(port->mapbase, SZ_4K, "uart-pl011")
-			!= NULL ? 0 : -EBUSY;
+	return devm_request_mem_region(port->dev, port->mapbase,
+			SZ_4K, "uart-pl011") != NULL ? 0 : -EBUSY;
 }
 
 /*
@@ -2436,13 +2436,15 @@ static int pl011_resume(struct device *dev)
 	if (of_device_is_compatible(dev->of_node, "nexell,pl011")) {
 		struct reset_control *rst;
 
-		rst = devm_reset_control_get(dev, "uart-reset");
+		rst = reset_control_get(dev, "uart-reset");
 		if (!rst) {
 			dev_err(dev, "failed to get reset control\n");
 			return -EINVAL;
 		}
 		if (reset_control_status(rst))
 			reset_control_reset(rst);
+
+		reset_control_put(rst);
 	};
 #endif
 

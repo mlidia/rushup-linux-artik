@@ -1022,6 +1022,7 @@ static int plane_create(struct drm_device *drm,
 	struct nx_top_plane *top;
 	struct nx_plane_layer *layer;
 	struct plane_format_type *format;
+	int ret = 0;
 
 	layer = kzalloc(sizeof(*layer), GFP_KERNEL);
 	if (!layer)
@@ -1036,8 +1037,11 @@ static int plane_create(struct drm_device *drm,
 				NX_PLANE_TYPE_VIDEO : 0;
 	layer->color.alpha = layer->type & NX_PLANE_TYPE_VIDEO ? 15 : 0;
 
-	sprintf(layer->name, "%d-%s%d", top->module,
+	ret = snprintf(layer->name, 16, "%d-%s%d", top->module,
 		layer->type & NX_PLANE_TYPE_VIDEO ? "vid" : "rgb", plane_num);
+
+	if (ret < 0)
+		return -EINVAL;
 
 	list_add_tail(&layer->list, &top->plane_list);
 	format = &plane_formats[layer->type & NX_PLANE_TYPE_VIDEO ? 1 : 0];
@@ -1429,6 +1433,11 @@ struct nx_drm_display *nx_drm_display_get(struct device *dev,
 		control = nx_drm_display_hdmi_get(dev, node, display);
 		break;
 	#endif
+	#ifdef CONFIG_DRM_NX_TVOUT
+	case NX_PANEL_TYPE_TVOUT:
+		control = nx_drm_display_tvout_get(dev, node, display);
+		break;
+	#endif
 	default:
 		DRM_ERROR("not support panel type [%d] !!!\n", type);
 		break;
@@ -1532,6 +1541,8 @@ void nx_display_mode_to_sync(struct drm_display_mode *mode,
 		vm.flags & DISPLAY_FLAGS_HSYNC_HIGH ? 1 : 0;
 
 	sync->v_active_len = vm.vactive;
+	if (sync->interlace)
+		sync->v_active_len /= 2;
 	sync->v_sync_width = vm.vsync_len;
 	sync->v_back_porch = vm.vback_porch;
 	sync->v_front_porch = vm.vfront_porch;

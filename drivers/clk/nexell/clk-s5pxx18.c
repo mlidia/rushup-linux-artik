@@ -173,7 +173,7 @@ static long clk_dev_pll_rate(int no)
 	char name[16];
 	long rate = 0;
 
-	sprintf(name, "pll%d", no);
+	snprintf(name, sizeof(name), "pll%d", no);
 	clk = clk_get(NULL, name);
 	rate = clk_get_rate(clk);
 	clk_put(clk);
@@ -298,6 +298,13 @@ static int dev_set_rate(struct clk_hw *hw, unsigned long rate)
 	return rate;
 }
 
+static int clk_dev_is_enabled(struct clk_hw *hw)
+{
+	struct clk_dev_peri *peri = to_clk_dev(hw)->peri;
+
+	return peri->enable;
+}
+
 /*
  *	clock devices interface
  */
@@ -316,8 +323,10 @@ static int clk_dev_enable(struct clk_hw *hw)
 	if (peri->in_mask & I_GATE_PCLK)
 		clk_dev_pclk((void *)peri->base, 1);
 
-	if (!(peri->in_mask & I_CLOCK_MASK))
+	if (!(peri->in_mask & I_CLOCK_MASK)) {
+		peri->enable = true;
 		return 0;
+	}
 
 	for (i = 0, inv = peri->invert_0; peri->clk_step > i;
 		i++, inv = peri->invert_1)
@@ -360,8 +369,10 @@ static void clk_dev_disable(struct clk_hw *hw)
 	if (peri->in_mask & I_GATE_PCLK)
 		clk_dev_pclk((void *)peri->base, 0);
 
-	if (!(peri->in_mask & I_CLOCK_MASK))
+	if (!(peri->in_mask & I_CLOCK_MASK)) {
+		peri->enable = false;
 		return;
+	}
 
 	clk_dev_rate((void *)peri->base, 0, 7, 256); /* for power save */
 	clk_dev_enb((void *)peri->base, 0);
@@ -406,6 +417,7 @@ static const struct clk_ops clk_dev_ops = {
 	.set_rate = clk_dev_set_rate,
 	.enable = clk_dev_enable,
 	.disable = clk_dev_disable,
+	.is_enabled = clk_dev_is_enabled,
 };
 
 static const struct clk_ops clk_empty_ops = {};
@@ -531,7 +543,7 @@ static void __init clk_dev_of_setup(struct device_node *node)
 #ifdef CONFIG_ARM_NEXELL_CPUFREQ
 	char pll[16];
 
-	sprintf(pll, "sys-pll%d", CONFIG_NEXELL_CPUFREQ_PLLDEV);
+	snprintf(pll, sizeof(pll), "sys-pll%d", CONFIG_NEXELL_CPUFREQ_PLLDEV);
 #endif
 
 	num_clks = of_get_child_count(node);

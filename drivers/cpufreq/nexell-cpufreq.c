@@ -36,6 +36,7 @@
 #include <linux/soc/nexell/cpufreq.h>
 
 #define DEV_NAME_CPUFREQ	"nexell-cpufreq"
+#define ENTRY_LEN		(10)
 
 /*
  * DVFS info
@@ -270,6 +271,7 @@ static int nxp_cpufreq_pm_notify(struct notifier_block *this,
 	return 0;
 }
 
+
 /*
  * Attribute sys interfaces
  */
@@ -291,10 +293,10 @@ static ssize_t show_speed_duration(struct cpufreq_policy *policy, char *buf)
 	}
 
 	for (; dvfs->table_size > i; i++)
-		count += sprintf(&buf[count], "%8ld ",
+		count += snprintf(&buf[count], ENTRY_LEN, "%8ld ",
 				 dvfs->time_stamp[i].duration);
 
-	count += sprintf(&buf[count], "\n");
+	count += snprintf(&buf[count], 2, "\n");
 	return count;
 }
 
@@ -341,10 +343,10 @@ static ssize_t show_available_voltages(struct cpufreq_policy *policy, char *buf)
 
 		if (dvfs->asv_ops->get_voltage)
 			uV = dvfs->asv_ops->get_voltage(dvfs_table[i][0]);
-		count += sprintf(&buf[count], "%ld ", uV);
+		count += snprintf(&buf[count], ENTRY_LEN, "%8ld ", uV);
 	}
 
-	count += sprintf(&buf[count], "\n");
+	count += snprintf(&buf[count], 2, "\n");
 	return count;
 }
 
@@ -356,9 +358,10 @@ static ssize_t show_cur_voltages(struct cpufreq_policy *policy, char *buf)
 	int i = 0;
 
 	for (; dvfs->table_size > i; i++)
-		count += sprintf(&buf[count], "%ld ", dvfs_table[i][1]);
+		count += snprintf(&buf[count], ENTRY_LEN, "%8ld ",
+			dvfs_table[i][1]);
 
-	count += sprintf(&buf[count], "\n");
+	count += snprintf(&buf[count], 2, "\n");
 	return count;
 }
 
@@ -589,16 +592,21 @@ static void *nxp_cpufreq_get_dt_data(struct platform_device *pdev)
 	}
 
 	list = of_get_property(node, "dvfs-tables", &size);
-	size /= FN_SIZE;
+	if (!list) {
+		pr_info("cannot find dvfs-tables\n");
+	} else {
+		size /= FN_SIZE;
 
-	if (size) {
-		for (i = 0; size/2 > i; i++) {
-			plat_tbs[i][0] = be32_to_cpu(*list++);
-			plat_tbs[i][1] = be32_to_cpu(*list++);
-			pr_debug("DTS %2d = %8ldkhz, %8ld uV\n",
-				 i, plat_tbs[i][0], plat_tbs[i][1]);
+		if (size) {
+			for (i = 0; size/2 > i; i++) {
+				plat_tbs[i][0] = be32_to_cpu(*list++);
+				plat_tbs[i][1] = be32_to_cpu(*list++);
+				pr_debug("DTS %2d = %8ldkhz, %8ld uV\n",
+					 i, plat_tbs[i][0], plat_tbs[i][1]);
+			}
+
+			pdata->table_size = size/2;
 		}
-		pdata->table_size = size/2;
 	}
 
 	return pdata;
@@ -668,6 +676,7 @@ static void *nxp_cpufreq_make_table(struct platform_device *pdev,
 			id++;
 		}
 	} else {
+	    if (plat_tbs) {
 		for (id = 0; tb_size > id; id++) {
 			dvfs_tables[id][0] = plat_tbs[id][0];
 			dvfs_tables[id][1] = plat_tbs[id][1];
@@ -675,6 +684,7 @@ static void *nxp_cpufreq_make_table(struct platform_device *pdev,
 			pr_info("DTB %2d = %8ldkhz, %8ld uV\n",
 			       id, dvfs_tables[id][0], dvfs_tables[id][1]);
 		}
+	    }
 	}
 
 	/* End table */
@@ -821,7 +831,7 @@ static int nxp_cpufreq_probe(struct platform_device *pdev)
 	if (!freq_table)
 		goto err_free_table;
 
-	sprintf(name, "pll%d", pdata->pll_dev);
+	snprintf(name, sizeof(name), "pll%d", pdata->pll_dev);
 	dvfs->clk = clk_get(NULL, name);
 	if (IS_ERR(dvfs->clk))
 		goto err_free_table;

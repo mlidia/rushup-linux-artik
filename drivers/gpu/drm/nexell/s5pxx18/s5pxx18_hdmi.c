@@ -68,12 +68,17 @@ static int hdmi_hpd_status(void)
 	return hdmi_read(HDMI_HPD_STATUS);
 }
 
-static void hdmi_reset(struct reset_control *rsc[], int num)
+static int hdmi_reset(struct reset_control *rsc[], int num)
 {
 	int count = (num - 1);	/* skip hdmi phy reset */
 	int i;
 
 	pr_debug("%s: resets %d\n", __func__, num);
+	if (num <= 0) {
+		pr_err("%s: resets num (currently %d) must be bigger than 0\n",
+		       __func__, num);
+		return -EINVAL;
+	}
 
 	for (i = 0; count > i; i++)
 		reset_control_assert(rsc[i]);
@@ -82,6 +87,8 @@ static void hdmi_reset(struct reset_control *rsc[], int num)
 
 	for (i = 0; count > i; i++)
 		reset_control_deassert(rsc[i]);
+
+	return 0;
 }
 
 static bool hdmi_wait_phy_ready(void)
@@ -99,7 +106,7 @@ static bool hdmi_wait_phy_ready(void)
 		mdelay(10);
 	} while (count--);
 
-	pr_info("HDMI: PHY [%s][0x%x] ...\n",
+	pr_debug("HDMI: PHY [%s][0x%x] ...\n",
 	       ret ? "Ready Done" : "Fail : Not Ready", val);
 
 	return ret;
@@ -249,6 +256,53 @@ static void hdmi_standby(void)
 	nx_disp_top_hdmi_set_vsync_start(0);
 	nx_disp_top_hdmi_set_hactive_start(0);
 	nx_disp_top_hdmi_set_hactive_end(0);
+}
+
+static int hdmi_try_dynamic_mode(struct videomode *vm, int refresh,
+			int pixelclock, unsigned int flags)
+{
+	u32 phyhtotal, phyvtotal;
+	int phyrefresh;
+
+	/* In hdmi_find_mode(), I thought all the given modes that have 0 refresh
+	 * rate was meaningless so I had them passed on during the
+	 * detecting process. But it turned out that they are necessary
+	 * modes and 0 just means "I don't care about the refresh rate."
+	 */
+	if (refresh == 0)
+		return -EINVAL;
+
+	if (hdmi_get_closest_timing(pixelclock, &phyhtotal,
+				&phyvtotal, &phyrefresh) == -EINVAL) {
+		pr_debug("%s<<ERR>>invalid parameters\n", __func__);
+		return -EINVAL;
+	}
+
+	/* we won't try to find interlace modes cause we do not support it */
+	if (vm->flags & DISPLAY_FLAGS_INTERLACED)
+		return -EINVAL;
+
+	phyhtotal = phyhtotal * phyrefresh / refresh;
+
+	/* Now set dynamic conf */
+	hdmi_conf_2Ddynamic_detect.mode.refresh = refresh;
+	hdmi_conf_2Ddynamic_detect.mode.pixelclock = pixelclock;
+	hdmi_conf_2Ddynamic_detect.mode.h_as = vm->hactive;
+	hdmi_conf_2Ddynamic_detect.mode.h_fp = vm->hfront_porch;
+	hdmi_conf_2Ddynamic_detect.mode.h_sw = vm->hsync_len;
+	hdmi_conf_2Ddynamic_detect.mode.h_bp = phyhtotal -
+		(vm->hactive + vm->hfront_porch + vm->hsync_len);
+	hdmi_conf_2Ddynamic_detect.mode.v_as = vm->vactive;
+	hdmi_conf_2Ddynamic_detect.mode.v_fp = vm->vfront_porch;
+	hdmi_conf_2Ddynamic_detect.mode.v_sw = vm->vsync_len;
+	hdmi_conf_2Ddynamic_detect.mode.v_bp = phyvtotal -
+		(vm->vactive + vm->vfront_porch + vm->vsync_len);
+
+	pr_debug("[%s] phyhtotal=%d, phyvtotal=%d, Search hac=%4d, vac=%4d,\
+			%2d fps, %dhz\n", __func__, phyhtotal, phyvtotal,
+			vm->hactive, vm->vactive, refresh, pixelclock);
+
+	return (num_hdmi_presets - 1);
 }
 
 static void hdmi_conf_set(const struct hdmi_conf *conf)
@@ -795,7 +849,7 @@ static int hdmi_find_mode(struct videomode *vm, int refresh,
 		if (mode->h_as != vm->hactive || mode->v_as != vm->vactive)
 			continue;
 
-		if (refresh && (mode->refresh != refresh))
+		if (refresh && mode->refresh != refresh)
 			continue;
 
 		if ((flags & HDMI_CHECK_PIXCLOCK) &&
@@ -809,6 +863,11 @@ static int hdmi_find_mode(struct videomode *vm, int refresh,
 			 __func__, i, mode->name, mode->h_as, mode->v_as,
 			 mode->refresh, mode->pixelclock);
 		return i;
+	}
+
+	if (hdmi_try_dynamic_mode(vm, refresh, pixelclock, flags) != -EINVAL) {
+		pr_debug("Attempting to do HDMI dynamic auto mode set...Hang on\n");
+		return (num_hdmi_presets - 1);
 	}
 
 	pr_debug("[%s] Not Find !\n", __func__);
@@ -851,6 +910,7 @@ static int hdmi_ops_enable(struct nx_drm_display *display)
 	const struct hdmi_preset *preset;
 	int pipe = hdmi->control.module;
 	u32 input = 0;
+	int err;
 
 	pr_debug("%s pipe.%d\n", __func__, pipe);
 
@@ -861,7 +921,9 @@ static int hdmi_ops_enable(struct nx_drm_display *display)
 	pr_debug("%s %s\n", __func__, preset->mode.name);
 
 	/* HDMI setup */
-	hdmi_reset(res->sub_resets, res->num_sub_resets);
+	err = hdmi_reset(res->sub_resets, res->num_sub_resets);
+	if (err < 0)
+		return -EINVAL;
 
 	hdmi_phy_set(conf, HDMI_PHY_TABLE_SIZE);
 
@@ -1066,7 +1128,7 @@ static int hdmi_ops_set_mode(struct nx_drm_display *display,
 	hdmi_mode_to_display_mode(&preset->mode, mode);
 	nx_display_mode_to_sync(mode, display);
 
-	pr_debug("%s %s done\n", __func__, preset->mode.name);
+	pr_debug("%s: %s done\n", __func__, preset->mode.name);
 	return 0;
 }
 

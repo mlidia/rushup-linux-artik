@@ -99,14 +99,14 @@ static int nx_vip_parse_dt(struct platform_device *pdev, struct nx_vip *me)
 		return -EINVAL;
 	}
 
-	sprintf(clk_names, "vip%d", me->module);
+	snprintf(clk_names, sizeof(clk_names), "vip%d", me->module);
 	me->clk = devm_clk_get(dev, clk_names);
 	if (IS_ERR(me->clk)) {
 		dev_err(dev, "failed to devm_clk_get for %s\n", clk_names);
 		return -ENODEV;
 	}
 
-	sprintf(reset_names, "vip%d-reset", me->module);
+	snprintf(reset_names, sizeof(reset_names), "vip%d-reset", me->module);
 	me->rst = devm_reset_control_get(dev, reset_names);
 	if (IS_ERR(me->rst)) {
 		dev_err(dev, "failed to get reset control\n");
@@ -356,12 +356,10 @@ EXPORT_SYMBOL_GPL(nx_vip_find_mbus_format);
 
 static const struct nx_mem_fmt_map supported_mem_formats[] = {
 	{
-#ifndef CONFIG_ARCH_S5P4418
 		.pixel_fmt	= V4L2_PIX_FMT_YUYV,
 		.media_bus_fmt	= MEDIA_BUS_FMT_YUYV8_1X16,
 		.nx_mem_fmt	= nx_vip_format_yuyv,
 	}, {
-#endif
 		.pixel_fmt	= V4L2_PIX_FMT_YUV420,
 		.media_bus_fmt	= MEDIA_BUS_FMT_YUYV12_1X24,
 		.nx_mem_fmt	= nx_vip_format_420,
@@ -463,7 +461,7 @@ static int nx_vip_probe(struct platform_device *pdev)
 	nx_vip_clock_enable(me->module, true);
 	nx_vip_reset(me->module);
 
-	sprintf(me->irq_name, "nx-vip%d", me->module);
+	snprintf(me->irq_name, sizeof(me->irq_name), "nx-vip%d", me->module);
 	ret = devm_request_irq(&pdev->dev, me->irq, &vip_irq_handler,
 			       IRQF_SHARED, me->irq_name, me);
 	if (ret) {

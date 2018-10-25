@@ -785,7 +785,12 @@ dtb-$(CONFIG_ARCH_S5P4418) += \
 	s5p4418-artik533-raptor-rev00.dtb \
 	s5p4418-artik305-raptor-rev00.dtb \
 	s5p4418-artik305-raptor-rev04.dtb \
-	s5p4418-artik305-explorer.dtb
+	s5p4418-artik305-explorer.dtb \
+	s5p4418-artik533-compy.dtb
+endif
+
+ifeq ($(CONFIG_ARCH_S5P4418),y)
+	DTC_FLAGS	?= -@ -H epapr
 endif
 
 dtstree		:= $(srctree)/$(src)
@@ -793,3 +798,4 @@ dtb-$(CONFIG_OF_ALL_DTBS) := $(patsubst $(dtstree)/%.dts,%.dtb, $(wildcard $(dts
 
 always		:= $(dtb-y)
 clean-files	:= *.dtb
+subdir-y	:= overlays

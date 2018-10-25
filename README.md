@@ -1,10 +1,13 @@
+
 # Linux Kernel for KITRA710C and KitraGTI
+
 ## Contents
 1. [Introduction](#1-introduction)
 2. [Build guide](#2-build-guide)
 3. [Update guide](#3-update-guide)
 
 ## 1. Introduction
+
 Fork from 'linux-artik' repository adding KITRA710C and KitraGTI support.
 
 ## 2. Build guide
@@ -35,6 +38,7 @@ sudo apt-get install android-tools-fsutils
 make ARCH=arm64 kitra710C_defconfig
 or
 make ARCH=arm64 kitragti_defconfig
+
 ```
 If you want to change kernel configurations,
 ```
@@ -50,6 +54,7 @@ Run:
 
 ## 3. Update Guide
 
+
 ```
 mount -o remount,rw /boot
 cp /root/Image /boot
@@ -58,4 +63,5 @@ dd if=/root/modules.img of=/dev/mmcblk0p5
 sync
 reboot
 ```
+
 

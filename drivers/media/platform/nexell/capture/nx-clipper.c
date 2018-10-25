@@ -235,7 +235,7 @@ static int parse_sensor_i2c_board_info_dt(struct device_node *np,
 		return -EINVAL;
 	}
 
-	strcpy(info->board_info.type, name);
+	strlcpy(info->board_info.type, name, sizeof(info->board_info.type));
 	info->board_info.addr = addr;
 	info->i2c_adapter_id = adapter;
 
@@ -672,7 +672,10 @@ static int nx_clipper_parse_dt(struct device *dev, struct nx_clipper *me)
 	}
 
 	/* common property */
-	of_property_read_u32(np, "data_order", &me->bus_fmt);
+	if (of_property_read_u32(np, "data_order", &me->bus_fmt)) {
+		dev_err(dev, "failed to get dt data_order\n");
+		return -EINVAL;
+	}
 
 	me->regulator_nr = of_property_count_strings(np, "regulator_names");
 	if (me->regulator_nr > 0) {
@@ -750,7 +753,7 @@ static int apply_gpio_action(struct device *dev, int gpio_num,
 	np = dev->of_node;
 	gpio = of_get_named_gpio(np, "gpios", gpio_num);
 
-	sprintf(label, "v4l2-cam #pwr gpio %d", gpio);
+	snprintf(label, sizeof(label), "v4l2-cam #pwr gpio %d", gpio);
 	if (!gpio_is_valid(gpio)) {
 		dev_err(dev, "invalid gpio %d set to %d\n", gpio, unit->value);
 		return -EINVAL;
@@ -979,7 +982,6 @@ static irqreturn_t nx_clipper_irq_handler(void *data)
 					done_buf->cb_buf_done(done_buf);
 				}
 			} else {
-				nx_vip_stop(me->module, VIP_CLIPPER);
 				me->buffer_underrun = true;
 			}
 		}
@@ -1014,9 +1016,7 @@ static int clipper_buffer_queue(struct nx_video_buffer *buf, void *data)
 	nx_video_add_buffer(&me->vbuf_obj, buf);
 
 	if (me->buffer_underrun) {
-		pr_debug("%s: rerun vip\n", __func__);
 		me->buffer_underrun = false;
-		nx_vip_run(me->module, VIP_CLIPPER);
 	}
 	return 0;
 }
@@ -1319,6 +1319,20 @@ static int nx_clipper_g_ctrl(struct v4l2_subdev *sd,
 	return ret;
 }
 
+static int nx_clipper_s_ctrl(struct v4l2_subdev *sd,
+			     struct v4l2_control *ctrl)
+{
+	struct nx_clipper *me = v4l2_get_subdevdata(sd);
+	struct v4l2_subdev *remote = get_remote_source_subdev(me);
+
+	if (!remote) {
+		WARN_ON(1);
+		return -ENODEV;
+	}
+
+	return v4l2_subdev_call(remote, core, s_ctrl, ctrl);
+}
+
 /**
  * called by VIDIOC_SUBDEV_S_CROP
  */
@@ -1400,16 +1414,6 @@ static int nx_clipper_set_fmt(struct v4l2_subdev *sd,
 	}
 
 	if (pad == 0) {
-		/* set bus format */
-		u32 nx_bus_fmt;
-		int ret = nx_vip_find_nx_bus_format(format->format.code,
-						    &nx_bus_fmt);
-		if (ret) {
-			dev_err(&me->pdev->dev, "Unsupported bus format %d\n",
-			       format->format.code);
-			return ret;
-		}
-		me->bus_fmt = nx_bus_fmt;
 		me->width = format->format.width;
 		me->height = format->format.height;
 	}
@@ -1462,6 +1466,7 @@ static const struct v4l2_subdev_pad_ops nx_clipper_pad_ops = {
 
 static const struct v4l2_subdev_core_ops nx_clipper_core_ops = {
 	.g_ctrl = nx_clipper_g_ctrl,
+	.s_ctrl = nx_clipper_s_ctrl,
 };
 
 static const struct v4l2_subdev_ops nx_clipper_subdev_ops = {
@@ -1612,16 +1617,18 @@ static int create_sysfs_for_camera_sensor(struct nx_clipper *me,
 	char sensor_name[V4L2_SUBDEV_NAME_SIZE];
 
 	memset(sensor_name, 0, V4L2_SUBDEV_NAME_SIZE);
-	sprintf(sensor_name, "%s %d-%04x",
+	snprintf(sensor_name, sizeof(sensor_name), "%s %d-%04x",
 		info->board_info.type,
 		info->i2c_adapter_id,
 		info->board_info.addr);
 
-	strcpy(camera_sensor_info[me->module].name, sensor_name);
+	strlcpy(camera_sensor_info[me->module].name, sensor_name,
+		V4L2_SUBDEV_NAME_SIZE);
 	camera_sensor_info[me->module].is_mipi =
 		me->interface_type == NX_CAPTURE_INTERFACE_MIPI_CSI;
 
-	sprintf(kobject_name, "camerasensor%d", me->module);
+	snprintf(kobject_name, sizeof(kobject_name), "camerasensor%d",
+		me->module);
 	kobj = kobject_create_and_add(kobject_name, &platform_bus.kobj);
 	if (!kobj) {
 		dev_err(&me->pdev->dev, "failed to kobject_create for module %d\n",
